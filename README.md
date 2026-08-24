@@ -6,7 +6,7 @@ XYSY installing an application of its own and without Claude Desktop needing to 
 ## Install
 
 ```
-hermes plugins install seanyoungster/xysy-door --enable
+hermes plugins install XYSY-Corp/xysy-door --enable
 hermes serve --stop
 hermes serve
 ```

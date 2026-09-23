@@ -1,0 +1,15 @@
+name: xycy_progress
+version: "0.1.0"
+description: "XYCY run instrumentation — mirrors Claude Code's stream-json into a Hermes-native NDJSON event feed that the XYCY Run Theater tails. Scoped per run via HERMES_HOME; inert unless XYCY_RUN_DIR is set."
+author: XYCY
+hooks:
+  - on_session_start
+  - on_session_end
+  - on_session_finalize
+  - pre_api_request
+  - post_api_request
+  - api_request_error
+  - pre_tool_call
+  - post_tool_call
+  - subagent_start
+  - subagent_stop

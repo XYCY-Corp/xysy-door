@@ -1,18 +1,18 @@
-# XYSY door — a Hermes plugin
+# XYCY door — a Hermes plugin
 
-Lets [XYSY](https://xysy.ai) on the web drive the creative applications on this computer, without
-XYSY installing an application of its own and without Claude Desktop needing to be open.
+Lets [XYCY](https://xycy.ai) on the web drive the creative applications on this computer, without
+XYCY installing an application of its own and without Claude Desktop needing to be open.
 
 ## Install
 
 ```
-hermes plugins install XYSY-Corp/xysy-door --enable
+hermes plugins install XYCY-Corp/xycy-door --enable
 hermes serve --stop
 hermes serve
 ```
 
-The first command clones the plugin into `~/.hermes/plugins/xysy` and adds it to `plugins.enabled`.
-The other two **restart** Hermes' server. Then open [xysy.ai](https://xysy.ai) → **Set up Hermes**
+The first command clones the plugin into `~/.hermes/plugins/xycy` and adds it to `plugins.enabled`.
+The other two **restart** Hermes' server. Then open [xycy.ai](https://xycy.ai) → **Set up Hermes**
 and press **↻ Try again**.
 
 🔴 **The restart is the step people miss.** Hermes discovers dashboard plugins when its server
@@ -34,25 +34,25 @@ It will appear to succeed and change nothing.
 after a reboot, run this once:
 
 ```
-bash ~/.hermes/plugins/xysy/keep-serving.sh
+bash ~/.hermes/plugins/xycy/keep-serving.sh
 ```
 
 It writes a LaunchAgent, starts it, and then asks the door whether it answered. Safe to run twice;
 removes nothing. To undo, see the end of this file.
 
-Update later with `hermes plugins update xysy`. Remove with `hermes plugins remove xysy`.
+Update later with `hermes plugins update xycy`. Remove with `hermes plugins remove xycy`.
 
 ## Why a door of its own
 
-Hermes' own local server refuses `xysy.ai` by name — measured against a real `hermes serve`:
+Hermes' own local server refuses `xycy.ai` by name — measured against a real `hermes serve`:
 
 ```
-Origin: https://xysy.ai        ->  400  Disallowed CORS origin
+Origin: https://xycy.ai        ->  400  Disallowed CORS origin
 Origin: http://localhost:5173  ->  200  allowed
 ```
 
 That is a hardcoded rule with a security reason attached, not a setting. So this plugin opens a
-second, much smaller listener on `127.0.0.1:4850` and answers only for XYSY.
+second, much smaller listener on `127.0.0.1:4850` and answers only for XYCY.
 
 ## The four locks
 
@@ -60,8 +60,8 @@ second, much smaller listener on `127.0.0.1:4850` and answers only for XYSY.
 2. **An origin allowlist**, enforced on the preflight *and* on the request.
 3. **A bearer token, always** — including when there is no `Origin` header. "No origin means not a
    browser, so trust it" is the wrong way round and is deliberately not done here.
-4. **Pairing.** The door belongs to exactly one XYSY account. The first key is verified upstream
-   with xysy.ai, and compared with `hmac.compare_digest`, never `==`.
+4. **Pairing.** The door belongs to exactly one XYCY account. The first key is verified upstream
+   with xycy.ai, and compared with `hmac.compare_digest`, never `==`.
 
 ## What it can do
 
@@ -80,11 +80,11 @@ come from Hermes' own `mcp_servers` config. A screen grab remains only as a fall
 ## Keeping the server up on macOS
 
 ```
-cat > ~/Library/LaunchAgents/ai.xysy.hermes-serve.plist <<'PLIST'
+cat > ~/Library/LaunchAgents/ai.xycy.hermes-serve.plist <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
-  <key>Label</key><string>ai.xysy.hermes-serve</string>
+  <key>Label</key><string>ai.xycy.hermes-serve</string>
   <key>ProgramArguments</key><array>
     <string>PYTHON</string><string>HERMES</string><string>serve</string><string>--skip-build</string>
   </array>
@@ -96,7 +96,7 @@ PLIST
 
 Replace `PYTHON` with `~/.hermes/hermes-agent/venv/bin/python` and `HERMES` with
 `~/.hermes/hermes-agent/hermes` (absolute paths — launchd does not expand `~`), then
-`launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/ai.xysy.hermes-serve.plist`.
+`launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/ai.xycy.hermes-serve.plist`.
 
 ## When the door does not open
 
@@ -105,7 +105,7 @@ That is correct, and it means a door that fails to start is **invisible** — He
 is enabled, nothing listens on 4850, and no log says why. Run the door by hand and it will tell you:
 
 ```
-~/.hermes/hermes-agent/venv/bin/python ~/.hermes/plugins/xysy/dashboard/api.py
+~/.hermes/hermes-agent/venv/bin/python ~/.hermes/plugins/xycy/dashboard/api.py
 ```
 
 It prints the port, the state file and the Hermes home it resolved, then either **Listening** or
@@ -119,6 +119,6 @@ reliable way to see it, not the log.
 ## Checking it works
 
 ```
-curl -s http://127.0.0.1:4850/xysy/hello
-{"ok": true, "door": "xysy", "version": "0.4.2", "host": "hermes", "paired": false, "email": ""}
+curl -s http://127.0.0.1:4850/xycy/hello
+{"ok": true, "door": "xycy", "version": "0.4.2", "host": "hermes", "paired": false, "email": ""}
 ```

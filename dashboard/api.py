@@ -1,48 +1,48 @@
-"""XYSY's door — the one thing a web page at xysy.ai can knock on.
+"""XYCY's door — the one thing a web page at xycy.ai can knock on.
 
 WHY THIS FILE EXISTS
 --------------------
-Hermes' own local server refuses xysy.ai by name. Measured 2026-08-10 on a real
-`hermes serve`: an identical request labelled `Origin: https://xysy.ai` comes back
+Hermes' own local server refuses xycy.ai by name. Measured 2026-08-10 on a real
+`hermes serve`: an identical request labelled `Origin: https://xycy.ai` comes back
 400 "Disallowed CORS origin", while `Origin: http://localhost:5173` sails through.
 That is a hardcoded regex in hermes_cli/web_server.py with a written reason —
 otherwise any website you visited could read and change Hermes' config and secrets.
 It is not a setting, and patching theirs would strand every user on a fork.
 
-So XYSY brings its own door. Hermes imports this file when the plugin is enabled,
+So XYCY brings its own door. Hermes imports this file when the plugin is enabled,
 which gives us a process that is already running and already has Hermes in it; we
 open a second, much smaller listener beside Hermes' own and answer only for us.
 
-    ~/.hermes/plugins/xysy/dashboard/{manifest.json, api.py}
+    ~/.hermes/plugins/xycy/dashboard/{manifest.json, api.py}
     enabled via  plugins.enabled  in config.yaml  (or one click in Hermes' UI)
 
 THE THREAT, STATED PLAINLY
 --------------------------
 Every website you visit can make your browser send requests to 127.0.0.1. This door
-can drive your applications. So the interesting question is never "can XYSY reach
+can drive your applications. So the interesting question is never "can XYCY reach
 it" — it is "why can nothing else". Four answers, and all four are required:
 
   1. IT ONLY LISTENS TO THE LOOPBACK. Nothing off this machine can reach the port.
 
   2. ORIGIN ALLOWLIST, ON THE PREFLIGHT *AND* ON THE REQUEST. A browser asks
      permission before sending anything interesting, and we say no to everyone
-     except XYSY. This is what stops evil.example driving your Rhino from a tab you
+     except XYCY. This is what stops evil.example driving your Rhino from a tab you
      forgot you had open.
 
   3. A BEARER TOKEN, ALWAYS. Origin checking alone trusts a header a browser sets
-     honestly and a script does not. The XYSY Local Agent's rule — "a caller with
+     honestly and a script does not. The XYCY Bridge's rule — "a caller with
      no Origin is not a browser, so trust it" — is the wrong way round, and it is
      deliberately NOT repeated here: no Origin means no browser means it still
      needs the token.
 
-  4. PAIRING. A token is not enough on its own, or any XYSY user anywhere could
+  4. PAIRING. A token is not enough on its own, or any XYCY user anywhere could
      drive THIS computer. The door is paired to exactly one account: the first
-     token is verified with xysy.ai, the account it names is remembered, and from
+     token is verified with xycy.ai, the account it names is remembered, and from
      then on only that account gets in.
 
-Nothing here is typed by a person. The browser is already signed in to xysy.ai, it
+Nothing here is typed by a person. The browser is already signed in to xycy.ai, it
 fetches its own short-lived key, and hands it to the door over loopback — the same
-handover the Local Agent already uses to connect a computer to an account.
+handover the Bridge already uses to connect a computer to an account.
 """
 
 from __future__ import annotations
@@ -62,42 +62,122 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+# --- XY-SAYPY ---------------------------------------------------------------
+# Say something when a handler catches.
+#
+# A LOCAL copy on purpose. This file ships inside the agent bundle, and some of
+# these files are published again as part of the Hermes door or copied into a
+# throwaway per-run home, so a shared module would have to be added to packaging
+# lists that nothing checks - and an import that is missing on somebody else's
+# machine is a worse failure than twelve lines written out more than once.
+#
+# It never raises, and it repeats itself at most three times per place, so a
+# handler inside a loop cannot bury everything else in the log.
+import sys as _xy_sys
+
+
+def _pid_is_alive(pid):
+    """Ask whether a process is running, without touching it. XY-KILLNOTASK."""
+    try:
+        pid = int(pid)
+    except Exception:
+        return False
+    if pid <= 0:
+        return False
+    if os.name == "nt":
+        import ctypes
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.OpenProcess(0x1000, False, pid)   # PROCESS_QUERY_LIMITED_INFORMATION
+        if not handle:
+            return False
+        try:
+            code = ctypes.c_ulong()
+            got = kernel32.GetExitCodeProcess(handle, ctypes.byref(code))
+            return bool(got) and code.value == 259           # STILL_ACTIVE
+        finally:
+            kernel32.CloseHandle(handle)
+    try:
+        os.kill(pid, 0)
+        return True
+    except Exception:
+        return False
+
+
+
+_XY_SAID = {}
+
+
+def say_something(err, where):
+    try:
+        n = _XY_SAID.get(where, 0) + 1
+        _XY_SAID[where] = n
+        if n > 3:
+            return
+        tail = " (further reports from this line are dropped)" if n == 3 else ""
+        _xy_sys.stderr.write("[xycy] " + str(where) + ": " + type(err).__name__
+                             + ": " + str(err) + tail + "\n")
+        _xy_sys.stderr.flush()
+    except Exception:
+        return  # the reporter cannot report itself; this is the one place silence is right
+# --- end XY-SAYPY -----------------------------------------------------------
+
+
 try:  # Hermes imports this file for `router`; the import must never break serve.
     from fastapi import APIRouter
 except Exception:  # pragma: no cover - only when FastAPI is absent
     APIRouter = None
 
-# A blank page at :4850/xysy is a STALE door, not a broken one - this is the fingerprint.
-DOOR_VERSION = "0.7.3"
-DOOR_PORT = int(os.environ.get("XYSY_DOOR_PORT", "4850"))
+# A blank page at :4850/xycy is a STALE door, not a broken one - this is the fingerprint.
+DOOR_VERSION = "0.7.5"
+DOOR_PORT = int(os.environ.get("XYCY_DOOR_PORT", "4850"))
 
 # Who may knock. A browser sends its page's origin; anything not on this list is
 # refused before it can send a body. localhost is here for development only.
 ALLOWED_ORIGINS = {
-    "https://xysy.ai",
-    "https://www.xysy.ai",
-    "https://xysy-2ct.pages.dev",
+    "https://xycy.ai",
+    "https://www.xycy.ai",
+    "https://xysy.ai",             # the old site name, kept while it redirects to the new one  # KEEP-OLD-NAME
+    "https://www.xysy.ai",         # KEEP-OLD-NAME
+    "https://xysy-2ct.pages.dev",  # the Pages project's own preview address  # KEEP-OLD-NAME
 }
-for _extra in (os.environ.get("XYSY_DOOR_ORIGINS") or "").split(","):
+for _extra in (os.environ.get("XYCY_DOOR_ORIGINS") or "").split(","):
     if _extra.strip():
         ALLOWED_ORIGINS.add(_extra.strip())
 
 # XY-DOORUI - the door now SERVES the screen too (v0.4.0). Until now the only
-# thing on this machine that could put /xysy in a browser was the Claude Desktop
+# thing on this machine that could put /xycy in a browser was the Claude Desktop
 # extension, so the app existed exactly as long as Claude was open. Hermes is
 # supposed to be the local agent; the door serves the same downloaded screen
-# from the same cache, so http://127.0.0.1:4850/xysy works with Claude closed.
+# from the same cache, so http://127.0.0.1:4850/xycy works with Claude closed.
 # A page we serve is our own origin, and its POSTs carry that origin — so the
 # door's own address must be on its own allowlist.
 SELF_ORIGINS = {"http://127.0.0.1:%d" % DOOR_PORT, "http://localhost:%d" % DOOR_PORT}
 ALLOWED_ORIGINS |= SELF_ORIGINS
 
 # Where the first token is checked. Reusing the relink route means the door never
-# has to understand XYSY's tokens: it asks xysy.ai "is this real, and whose is it",
+# has to understand XYCY's tokens: it asks xycy.ai "is this real, and whose is it",
 # and gets a fresh key back in the same breath.
-VERIFY_URL = os.environ.get("XYSY_DOOR_VERIFY_URL", "https://xysy.ai/api/m/relink")
+VERIFY_URL = os.environ.get("XYCY_DOOR_VERIFY_URL", "https://xycy.ai/api/m/relink")
 
-STATE = Path(os.environ.get("XYSY_DOOR_STATE") or (Path.home() / ".hermes" / "xysy-door.json"))
+def hermes_home() -> Path:
+    """Where Hermes keeps its own home folder.
+
+    Hermes' own installer sets HERMES_HOME, so that wins whenever it is set. When it
+    is not set the default is not the same on every operating system, and assuming
+    ~/.hermes everywhere is how XYCY came to look in an empty folder: measured on
+    8 September 2026, a Hermes Desktop install on Windows put its home in
+    %LOCALAPPDATA%\\hermes and left ~/.hermes holding nothing at all.
+    """
+    env = os.environ.get("HERMES_HOME")
+    if env:
+        return Path(env)
+    if os.name == "nt":
+        local = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
+        return Path(local) / "hermes"
+    return Path.home() / ".hermes"
+
+
+STATE = Path(os.environ.get("XYCY_DOOR_STATE") or (hermes_home() / "xycy-door.json"))
 RECHECK_SECONDS = 30 * 60
 
 
@@ -118,7 +198,7 @@ def _save(data: dict) -> None:
 
 
 def _verify_upstream(token: str) -> dict:
-    """Ask xysy.ai whether this key is real and whose it is.
+    """Ask xycy.ai whether this key is real and whose it is.
 
     Returns {} for anything other than a clean yes. A door that guessed here would
     be a door that opens for a forged key.
@@ -126,7 +206,7 @@ def _verify_upstream(token: str) -> dict:
     req = urllib.request.Request(VERIFY_URL, headers={
         "authorization": "Bearer " + token,
         "accept": "application/json",
-        "user-agent": "XYSY-Door/" + DOOR_VERSION,
+        "user-agent": "XYCY-Door/" + DOOR_VERSION,
     })
     try:
         with urllib.request.urlopen(req, timeout=20) as resp:
@@ -140,17 +220,37 @@ def _verify_upstream(token: str) -> dict:
 
 # ------------------------------------------------------------------- the screen
 # The screen is DOWNLOADED, not built in — same contract as the Claude extension
-# (see local-agent/mcpb/server/index.js): one source (xysy.ai /api/m/ui), one
-# cache (~/.xysy/ui/xysy.html), shared between both doors. Offline serves the
+# (see local-agent/mcpb/server/index.js): one source (xycy.ai /api/m/ui), one
+# cache (~/.xycy/ui/xycy.html), shared between both doors. Offline serves the
 # last download; a machine never linked says so in words.
-UI_DIR = Path(os.environ.get("XYSY_UI_DIR") or (Path.home() / ".xysy" / "ui"))
-UI_FILE = UI_DIR / "xysy.html"
-UI_ETAG = UI_DIR / "xysy.etag"
+# The home folder moved with the product's renames: ~/.openstudio, ~/.xysy, now ~/.xycy.  # KEEP-OLD-NAME
+# Move the newest old home once, so a machine that runs only Hermes (no Claude extension to
+# do the move) keeps its pairing, its registry and its cached screen. Lines that keep an old
+# name carry KEEP-OLD-NAME so a rename pass skips them.
+try:
+    _new_home = Path.home() / ".xycy"
+    if not _new_home.exists():
+        for _old_name in (".xysy", ".openstudio"):  # KEEP-OLD-NAME
+            _old_home = Path.home() / _old_name
+            if _old_home.exists():
+                _old_home.rename(_new_home)
+                break
+    _old_ui = _new_home / "ui" / "xysy.html"  # KEEP-OLD-NAME
+    if _old_ui.exists() and not (_new_home / "ui" / "xycy.html").exists():
+        _old_ui.rename(_new_home / "ui" / "xycy.html")
+    _old_etag = _new_home / "ui" / "xysy.etag"  # KEEP-OLD-NAME
+    if _old_etag.exists() and not (_new_home / "ui" / "xycy.etag").exists():
+        _old_etag.rename(_new_home / "ui" / "xycy.etag")
+except Exception as _xy_e:
+    say_something(_xy_e, 'local-agent/hermes-plugin/xycy/dashboard/api.py:245')
+UI_DIR = Path(os.environ.get("XYCY_UI_DIR") or (Path.home() / ".xycy" / "ui"))
+UI_FILE = UI_DIR / "xycy.html"
+UI_ETAG = UI_DIR / "xycy.etag"
 UI_MIN_BYTES = 200_000        # a sign-in page / error JSON is a few hundred bytes;
                               # writing one over the cache would blank the app offline
-UI_GAP_S = float(os.environ.get("XYSY_UI_GAP_MS", "60000")) / 1000.0
-UI_FETCH_S = float(os.environ.get("XYSY_UI_FETCH_MS", "6000")) / 1000.0
-CLOUD_BASE = (os.environ.get("XYSY_CLOUD_BASE") or "https://xysy.ai").rstrip("/")
+UI_GAP_S = float(os.environ.get("XYCY_UI_GAP_MS", "60000")) / 1000.0
+UI_FETCH_S = float(os.environ.get("XYCY_UI_FETCH_MS", "6000")) / 1000.0
+CLOUD_BASE = (os.environ.get("XYCY_CLOUD_BASE") or "https://xycy.ai").rstrip("/")
 
 _ui_lock = threading.Lock()
 _ui_checked_at = 0.0
@@ -163,11 +263,11 @@ def _ui_token() -> str:
     if state.get("token") and float(state.get("expiresAt") or 0) / 1000.0 > time.time():
         return state["token"]
     try:
-        link = json.loads((Path.home() / ".xysy" / "cloud_link.json").read_text(encoding="utf-8"))
+        link = json.loads((Path.home() / ".xycy" / "cloud_link.json").read_text(encoding="utf-8"))
         if link.get("token"):
             return link["token"]
-    except Exception:
-        pass
+    except Exception as _xy_e:
+        say_something(_xy_e, 'local-agent/hermes-plugin/xycy/dashboard/api.py:270')
     return ""
 
 
@@ -181,12 +281,12 @@ def _refresh_ui() -> None:
         if not token:
             return                    # not linked: the cache is all there is
         headers = {"authorization": "Bearer " + token, "accept": "text/html",
-                   "user-agent": "XYSY-Door/" + DOOR_VERSION}
+                   "user-agent": "XYCY-Door/" + DOOR_VERSION}
         etag = ""
         try:
             etag = UI_ETAG.read_text(encoding="utf-8").strip()
-        except Exception:
-            pass
+        except Exception as _xy_e:
+            say_something(_xy_e, 'local-agent/hermes-plugin/xycy/dashboard/api.py:289')
         # An etag with no file behind it would answer 304 forever.
         if not UI_FILE.exists():
             etag = ""
@@ -216,8 +316,8 @@ def _refresh_ui() -> None:
             if new_etag:
                 UI_ETAG.write_text(new_etag, encoding="utf-8")
             _ui_checked_at = time.time()
-        except Exception:
-            pass
+        except Exception as _xy_e:
+            say_something(_xy_e, 'local-agent/hermes-plugin/xycy/dashboard/api.py:320')
 
 
 _CTYPES = {"svg": "image/svg+xml", "png": "image/png", "jpg": "image/jpeg",
@@ -229,16 +329,16 @@ _CTYPES = {"svg": "image/svg+xml", "png": "image/png", "jpg": "image/jpeg",
 
 def _no_screen_page() -> bytes:
     linked = bool(_ui_token())
-    body = ("<p>This computer is connected to a XYSY account, but could not reach the site "
+    body = ("<p>This computer is connected to a XYCY account, but could not reach the site "
             "just now. Reload this page once the network is back.</p>" if linked else
-            "<p>Open <a href='https://xysy.ai'>xysy.ai</a> in this browser once, sign in, and "
+            "<p>Open <a href='https://xycy.ai'>xycy.ai</a> in this browser once, sign in, and "
             "connect this computer. The screen arrives with it; after that it works offline "
             "from the last download.</p>")
-    return ("<!doctype html><html><head><meta charset='utf-8'><title>XYSY</title>"
+    return ("<!doctype html><html><head><meta charset='utf-8'><title>XYCY</title>"
             "<style>body{font-family:-apple-system,system-ui,sans-serif;margin:0;"
             "padding:32px;max-width:620px;line-height:1.5;color:#1a1a1a}</style></head>"
-            "<body><h2>There is no XYSY screen on this computer yet</h2>"
-            "<p>XYSY keeps the last screen the site gave it and serves that copy — "
+            "<body><h2>There is no XYCY screen on this computer yet</h2>"
+            "<p>XYCY keeps the last screen the site gave it and serves that copy — "
             "this door (Hermes) does exactly what the Claude extension does.</p>"
             + body + "</body></html>").encode("utf-8")
 
@@ -260,7 +360,7 @@ def _job_ping(_args: dict) -> dict:
 #
 # The connectors themselves are Hermes' business, not ours: we read the set the person
 # already has in ~/.hermes/config.yaml. That is the whole premise of being a plugin —
-# Hermes owns the connectors, XYSY asks them questions.
+# Hermes owns the connectors, XYCY asks them questions.
 
 CAPTURE_SPEC = {
     "rhino": ("capture_viewport", {"viewport": "active", "width": 1000, "height": 667}),
@@ -279,7 +379,7 @@ APP_TO_SERVER = {
 
 
 def _hermes_config() -> dict:
-    home = Path(os.environ.get("HERMES_HOME") or (Path.home() / ".hermes"))
+    home = hermes_home()
     try:
         import yaml
         return yaml.safe_load((home / "config.yaml").read_text(encoding="utf-8")) or {}
@@ -313,7 +413,7 @@ def _hermes_model() -> dict:
 
 def _hermes_servers() -> dict:
     """The connectors Hermes already has. Read from its config, never from ours."""
-    home = Path(os.environ.get("HERMES_HOME") or (Path.home() / ".hermes"))
+    home = hermes_home()
     cfg = home / "config.yaml"
     try:
         import yaml  # Hermes' own dependency; we run inside its process.
@@ -348,8 +448,8 @@ def _end(proc) -> None:
     except Exception:
         try:
             proc.kill()
-        except Exception:
-            pass
+        except Exception as _xy_e:
+            say_something(_xy_e, 'local-agent/hermes-plugin/xycy/dashboard/api.py:452')
 
 
 def _mcp_call(entry: dict, tool: str, args: dict, timeout: float = 60.0) -> dict:
@@ -383,15 +483,15 @@ def _mcp_call(entry: dict, tool: str, args: dict, timeout: float = 60.0) -> dict
         try:
             proc.stdin.write(json.dumps(obj) + "\n")
             proc.stdin.flush()
-        except Exception:
-            pass
+        except Exception as _xy_e:
+            say_something(_xy_e, 'local-agent/hermes-plugin/xycy/dashboard/api.py:487')
 
     result = {"ok": False, "error": "the connector never answered"}
     deadline = time.time() + timeout
     try:
         send({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
             "protocolVersion": "2024-11-05", "capabilities": {},
-            "clientInfo": {"name": "xysy-door", "version": DOOR_VERSION}}})
+            "clientInfo": {"name": "xycy-door", "version": DOOR_VERSION}}})
         while time.time() < deadline:
             line = proc.stdout.readline()
             if not line:
@@ -472,15 +572,15 @@ def _mcp_call_text(entry: dict, tool: str, args: dict, timeout: float = 180.0) -
         try:
             proc.stdin.write(json.dumps(obj) + "\n")
             proc.stdin.flush()
-        except Exception:
-            pass
+        except Exception as _xy_e:
+            say_something(_xy_e, 'local-agent/hermes-plugin/xycy/dashboard/api.py:576')
 
     result = {"ok": False, "error": "the connector never answered"}
     deadline = time.time() + timeout
     try:
         send({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
             "protocolVersion": "2024-11-05", "capabilities": {},
-            "clientInfo": {"name": "xysy-door", "version": DOOR_VERSION}}})
+            "clientInfo": {"name": "xycy-door", "version": DOOR_VERSION}}})
         while time.time() < deadline:
             line = proc.stdout.readline()
             if not line:
@@ -513,16 +613,16 @@ def _mcp_call_text(entry: dict, tool: str, args: dict, timeout: float = 180.0) -
 
 
 def _connector_entry(name: str) -> dict:
-    """How to start ONE connector: Hermes' config first, then XYSY's own registry.
+    """How to start ONE connector: Hermes' config first, then XYCY's own registry.
 
     _hermes_servers() is deliberately Hermes-only, because _job_servers must describe
     Hermes rather than us. But a RUN never uses that file either - it writes a per-run
-    Hermes profile from ~/.xysy/registry.json - so on a normally set up machine the
+    Hermes profile from ~/.xycy/registry.json - so on a normally set up machine the
     global config is empty and asking only it means the door can drive nothing.
 
     The boundary this door exists to hold is that the PAGE never hands this computer a
     command line. It does not: it names an app. Which local file records the command for
-    that app is our business, and registry.json is the one XYSY actually keeps.
+    that app is our business, and registry.json is the one XYCY actually keeps.
     """
     name = str(name or "").strip()
     if not name:
@@ -531,12 +631,12 @@ def _connector_entry(name: str) -> dict:
     if isinstance(entry, dict) and entry.get("command"):
         return entry
     try:
-        reg = json.loads((Path.home() / ".xysy" / "registry.json").read_text(encoding="utf-8"))
+        reg = json.loads((Path.home() / ".xycy" / "registry.json").read_text(encoding="utf-8"))
         ours = (reg.get("servers") or {}).get(name)
         if isinstance(ours, dict) and ours.get("command"):
             return ours
-    except Exception:
-        pass
+    except Exception as _xy_e:
+        say_something(_xy_e, 'local-agent/hermes-plugin/xycy/dashboard/api.py:639')
     return entry if isinstance(entry, dict) else {}
 
 
@@ -575,7 +675,7 @@ def _job_servers(_args: dict) -> dict:
 def _job_apps(_args: dict) -> dict:
     """Which creative applications are open right now.
 
-    Deliberately "open", not "installed": the door's job is to tell XYSY what it can
+    Deliberately "open", not "installed": the door's job is to tell XYCY what it can
     drive this second. A full inventory is a separate, slower question.
     """
     if os.name == "nt":
@@ -601,15 +701,15 @@ def _screen_grab(app: str) -> dict:
     wid = (ids.stdout or "").split(",")[0].strip()
     denied = "assistive access" in (ids.stderr or "")
 
-    path = Path(tempfile.gettempdir()) / ("xysy-door-%d.png" % int(time.time() * 1000))
+    path = Path(tempfile.gettempdir()) / ("xycy-door-%d.png" % int(time.time() * 1000))
     if wid.isdigit():
         via, note = "window", ""
         try:
             subprocess.run(["osascript", "-e", 'tell application "%s" to activate' % app],
                            capture_output=True, timeout=20)
             time.sleep(0.4)
-        except Exception:
-            pass
+        except Exception as _xy_e:
+            say_something(_xy_e, 'local-agent/hermes-plugin/xycy/dashboard/api.py:712')
         argv = ["screencapture", "-x", "-o", "-l", wid, str(path)]
     else:
         # Say so in the answer. A picture that quietly stopped being the window you asked
@@ -627,8 +727,8 @@ def _screen_grab(app: str) -> dict:
     data = base64.b64encode(path.read_bytes()).decode("ascii")
     try:
         path.unlink()
-    except Exception:
-        pass
+    except Exception as _xy_e:
+        say_something(_xy_e, 'local-agent/hermes-plugin/xycy/dashboard/api.py:731')
     out = {"ok": True, "via": via, "bytes": len(data),
            "dataUrl": "data:image/png;base64," + data}
     if note:
@@ -679,7 +779,7 @@ def _job_capture(args: dict) -> dict:
 
 
 # ---------------------------------------------------------------- running a workflow
-# THE RUN ITSELF IS NOT NEW. `xysy_hermes_run.py` was written for the XYSY agent and is
+# THE RUN ITSELF IS NOT NEW. `xycy_hermes_run.py` was written for the XYCY agent and is
 # already Hermes-shaped Python: it builds a per-run HERMES_HOME so a run only starts the
 # connectors it declares, raises Hermes' 50-tool-call ceiling, and streams tool-by-tool
 # events through an observer plugin instead of scraping stdout. All the door does is
@@ -694,19 +794,35 @@ def _job_capture(args: dict) -> dict:
 # this repo has lost hours to one file living in four places before.
 
 PROJECTS_ROOT = Path(
-    os.environ.get("XYSY_PROJECTS") or (Path.home() / "Documents" / "Claude" / "Projects")
+    os.environ.get("XYCY_PROJECTS") or (Path.home() / "Documents" / "Claude" / "Projects")
 )
 
 
 def _runner() -> str:
+    """This door's OWN runner, and nothing else.
+
+    XY-ENGINEALONE. There used to be a second candidate here: the copy inside the Claude
+    Desktop extension. It was meant kindly and it broke the one rule this door exists to
+    keep - the Hermes engine must work on a computer that has Hermes and nothing else.
+
+    What the fallback actually did was hide an incomplete install. On a machine that also
+    had Claude Desktop, a door missing its own runner worked perfectly and nobody found
+    out; on a machine with only Hermes, the same install was simply broken. Worse, the two
+    copies drift: on 19 Sep 2026 the extension's runner had two sibling files the door's
+    did not, so a door borrowing that runner pointed its write-guard hook at a path under
+    the Claude extension - present on one machine, absent on the next, and silent either
+    way (Hermes logs a missing hook command and carries on).
+
+    It was also macOS-only, which made it a fallback that could not even be relied on to
+    be wrong consistently.
+
+    So: this door uses its own runner or says it has none. sync_hermes_runner.py derives
+    the list of files that runner needs beside itself and refuses a push when the door is
+    missing any of them, which is the check that makes this safe to be strict about.
+    """
     here = Path(__file__).resolve().parent
-    for cand in (here.parent / "runner" / "xysy_hermes_run.py",
-                 Path.home() / "Library" / "Application Support" / "Claude" /
-                 "Claude Extensions" / "local.mcpb.xysy.xysy-agent" / "server" / "hermes" /
-                 "xysy_hermes_run.py"):
-        if cand.exists():
-            return str(cand)
-    return ""
+    mine = here.parent / "runner" / "xycy_hermes_run.py"
+    return str(mine) if mine.exists() else ""
 
 
 def _inside_projects(p: Path) -> bool:
@@ -726,7 +842,7 @@ def _inside_projects(p: Path) -> bool:
 def _run_helper(argv: list, timeout: float = 180.0) -> dict:
     runner = _runner()
     if not runner:
-        return {"ok": False, "error": "the XYSY runner is missing from this plugin"}
+        return {"ok": False, "error": "the XYCY runner is missing from this plugin"}
     import sys as _sys
     proc = subprocess.run([_sys.executable, runner] + argv, capture_output=True,
                           text=True, timeout=timeout)
@@ -756,7 +872,7 @@ def _job_project_create(args: dict) -> dict:
         return {"ok": False, "error": "that name is not allowed"}
     for sub in ("inputs", "outputs", "runs"):
         (target / sub).mkdir(parents=True, exist_ok=True)
-    marker = target / ".xysy.json"
+    marker = target / ".xycy.json"
     if not marker.exists():
         marker.write_text(json.dumps({"workflow": name, "created": int(time.time() * 1000)}),
                           encoding="utf-8")
@@ -767,7 +883,7 @@ def _job_run_write(args: dict) -> dict:
     d = Path(str(args.get("dir") or ""))
     run_id = str(args.get("runId") or ("run_%d" % int(time.time() * 1000)))
     if not d.name or not _inside_projects(d):
-        return {"ok": False, "error": "that is not a XYSY project folder"}
+        return {"ok": False, "error": "that is not a XYCY project folder"}
     if not re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", run_id):
         return {"ok": False, "error": "that run name is not allowed"}
     rd = d / "runs" / run_id
@@ -828,8 +944,8 @@ def _job_run_status(args: dict) -> dict:
     # run-honesty rules exist to prevent.
     try:
         out["progress"] = json.loads((d / "runs" / run_id / "progress.json").read_text(encoding="utf-8"))
-    except Exception:
-        pass
+    except Exception as _xy_e:
+        say_something(_xy_e, 'local-agent/hermes-plugin/xycy/dashboard/api.py:948')
     return out
 
 
@@ -847,7 +963,7 @@ def _job_read_output(args: dict) -> dict:
     rel = str(args.get("path") or "")
     target = (d / rel)
     if not _inside_projects(d) or not _inside_projects(target) or ".." in rel:
-        return {"ok": False, "error": "that file is not inside a XYSY project"}
+        return {"ok": False, "error": "that file is not inside a XYCY project"}
     if not target.is_file():
         return {"ok": False, "error": "no such file"}
     if target.stat().st_size > 2_000_000:
@@ -859,7 +975,7 @@ def _job_read_output(args: dict) -> dict:
         return {"ok": True, "path": rel, "base64": base64.b64encode(target.read_bytes()).decode()}
 
 # ------------------------------------------------------------------ the rest of the port
-# What XYSY asks a computer for, beyond runs and pictures. Everything here either forwards
+# What XYCY asks a computer for, beyond runs and pictures. Everything here either forwards
 # to something Hermes already owns (connectors, skills) or is one of the three jobs Hermes
 # has no reason to have (what is installed, launch this, package this).
 
@@ -867,15 +983,15 @@ def _job_system(_args: dict) -> dict:
     import platform
     cfg = _hermes_config()
     # XY-DOORWIDE - the page's three system_info readers want the AGENT's dialect: `os` as
-    # "darwin 25.5.0" (platform.system + release, lowercased) and `xysy_root`. Answer in that
+    # "darwin 25.5.0" (platform.system + release, lowercased) and `xycy_root`. Answer in that
     # dialect, keep the door's own fields beside it - the UI must not be able to tell which
     # door a fact came through, or every screen grows a second branch.
     return {"ok": True, "host": platform.node(),
             "os": platform.system().lower() + " " + platform.release(),
             "python": platform.python_version(), "door": DOOR_VERSION,
-            "agent": "xysy-door", "version": DOOR_VERSION,
-            "xysy_root": str(Path.home() / ".xysy"),
-            "hermesHome": str(Path(os.environ.get("HERMES_HOME") or (Path.home() / ".hermes"))),
+            "agent": "xycy-door", "version": DOOR_VERSION,
+            "xycy_root": str(Path.home() / ".xycy"),
+            "hermesHome": str(hermes_home()),
             "projects": str(PROJECTS_ROOT),
             "model": (cfg.get("model") or {}).get("default")}
 
@@ -886,14 +1002,14 @@ def _job_think(args: dict) -> dict:
     Anything whose answer has to come from OUTSIDE the prompt — a live web search, finding
     a connector nobody has heard of — is NOT answered here. Measured: asked to search the
     web for MCP servers for Revit, this model invented four, with URLs. Those questions
-    belong to XYSY's own key, which the PAGE can reach and the door cannot.
+    belong to XYCY's own key, which the PAGE can reach and the door cannot.
     """
     prompt = str(args.get("prompt") or "")
     if not prompt.strip():
         return {"ok": False, "error": "nothing to think about"}
     if args.get("web") or args.get("cloud"):
         return {"ok": False, "needs": "account",
-                "error": "this one needs XYSY's own reasoning, not the local model"}
+                "error": "this one needs XYCY's own reasoning, not the local model"}
     argv = ["think", "--prompt", prompt, "--timeout", str(int(args.get("timeout") or 180))]
     if args.get("system"):
         argv += ["--system", str(args["system"])]
@@ -947,15 +1063,15 @@ def _mcp_list_tools(entry: dict, timeout: float = 45.0) -> dict:
         try:
             proc.stdin.write(json.dumps(obj) + "\n")
             proc.stdin.flush()
-        except Exception:
-            pass
+        except Exception as _xy_e:
+            say_something(_xy_e, 'local-agent/hermes-plugin/xycy/dashboard/api.py:1067')
 
     out = {"ok": False, "error": "the connector never answered"}
     deadline = time.time() + timeout
     try:
         send({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
             "protocolVersion": "2024-11-05", "capabilities": {},
-            "clientInfo": {"name": "xysy-door", "version": DOOR_VERSION}}})
+            "clientInfo": {"name": "xycy-door", "version": DOOR_VERSION}}})
         while time.time() < deadline:
             line = proc.stdout.readline()
             if not line:
@@ -980,11 +1096,13 @@ def _mcp_list_tools(entry: dict, timeout: float = 45.0) -> dict:
 
 
 def _job_projects(_args: dict) -> dict:
-    """The workflow folders XYSY has made, and nothing else in there."""
+    """The workflow folders XYCY has made, and nothing else in there."""
     out = []
     try:
         for child in sorted(PROJECTS_ROOT.iterdir()):
-            marker = child / ".xysy.json"
+            marker = child / ".xycy.json"
+            if child.is_dir() and not marker.exists() and (child / ".xysy.json").exists():  # a project made before the rename  # KEEP-OLD-NAME
+                marker = child / ".xysy.json"  # KEEP-OLD-NAME
             if child.is_dir() and marker.exists():
                 try:
                     meta = json.loads(marker.read_text(encoding="utf-8"))
@@ -1031,7 +1149,7 @@ def _job_open(args: dict) -> dict:
         return {"ok": False, "error": "open what?"}
     p = Path(target)
     if not _inside_projects(p):
-        return {"ok": False, "error": "that is not inside a XYSY project"}
+        return {"ok": False, "error": "that is not inside a XYCY project"}
     try:
         subprocess.run(["explorer" if os.name == "nt" else "open", str(p)],
                        capture_output=True, timeout=20)
@@ -1055,7 +1173,7 @@ def _job_inventory(_args: dict) -> dict:
     """What creative software this computer actually owns, with versions.
 
     The difference between "that application is not connected" and "you do not own that
-    application" — two sentences XYSY must never mix up. Read-only: nothing is launched.
+    application" — two sentences XYCY must never mix up. Read-only: nothing is launched.
     """
     try:
         if os.name == "nt":
@@ -1082,13 +1200,13 @@ def _job_inventory(_args: dict) -> dict:
 def _job_stage_skills(args: dict) -> dict:
     """Write a run's skills into the project so the harness loads them.
 
-    Two homes on purpose: `.claude/skills/` is what XYSY has always written and what the
+    Two homes on purpose: `.claude/skills/` is what XYCY has always written and what the
     Claude path reads; the per-run Hermes profile symlinks that same folder in at start
     time. One source of truth, two readers.
     """
     d = Path(str(args.get("dir") or ""))
     if not _inside_projects(d):
-        return {"ok": False, "error": "that is not a XYSY project folder"}
+        return {"ok": False, "error": "that is not a XYCY project folder"}
     staged = []
     for skill in (args.get("skills") or []):
         sid = re.sub(r"[^A-Za-z0-9_.-]+", "-", str(skill.get("id") or "")).strip("-")
@@ -1102,8 +1220,8 @@ def _job_stage_skills(args: dict) -> dict:
     return {"ok": True, "staged": staged}
 
 # ------------------------------------------------------- XY-DOORSETUP - the setup screen
-# Hermes' six-step setup screen used to be answerable only by the XYSY Local Agent, which
-# is a Claude Desktop extension: with Claude closed the screen said "XYSY can't see this
+# Hermes' six-step setup screen used to be answerable only by the XYCY Bridge, which
+# is a Claude Desktop extension: with Claude closed the screen said "XYCY can't see this
 # Mac" and stopped there. Steps 3-6 ask about HERMES, and this file runs inside Hermes, so
 # the door answers them and Claude is not needed on the machine at all.
 #
@@ -1112,11 +1230,11 @@ def _job_stage_skills(args: dict) -> dict:
 # Hermes is installed. Those two belong to the person, and the screen now says so plainly
 # instead of offering a button that only works when Claude happens to be open.
 #
-# The shape of every answer below matches the Local Agent's tool of the same name, because
+# The shape of every answer below matches the Bridge's tool of the same name, because
 # the SAME runner produces it. The UI must not be able to tell which door it came through -
 # if it could, every screen would grow a second dialect. `via` is for humans reading logs.
 
-MIN_CONTEXT = 64000   # keep in step with HERMES_MIN_CONTEXT in the Local Agent's index.js
+MIN_CONTEXT = 64000   # keep in step with HERMES_MIN_CONTEXT in the Bridge's index.js
 
 # What a model id is allowed to look like. The door is reachable from a web page, so the id
 # is treated as hostile input even though nothing here goes near a shell: fixed argv,
@@ -1128,7 +1246,7 @@ def _shaped(out: dict) -> dict:
     """Every answer is a dict carrying minContext. A runner that returned something odd is a
     failure, not a silent empty success - the UI reads absence as 'not installed'."""
     if not isinstance(out, dict):
-        return {"ok": False, "error": "the runner gave an answer XYSY could not read",
+        return {"ok": False, "error": "the runner gave an answer XYCY could not read",
                 "minContext": MIN_CONTEXT, "via": "door"}
     out["minContext"] = MIN_CONTEXT
     out["via"] = "door"
@@ -1168,9 +1286,13 @@ def _job_hermes_status(args: dict) -> dict:
 def _job_set_model(args: dict) -> dict:
     """Point Hermes at one of the models already on this computer.
 
-    TWO numbers, not one. `model.default` is what Hermes believes; `model.ollama_num_ctx` is
-    what Ollama actually allocates, and Hermes checks the latter - setting only the first is
-    how a model with a 40,960-token window passed a 64k readiness check.
+    THREE keys, not one. `model.default` is the model. `model.ollama_num_ctx` is what Ollama
+    actually allocates, and Hermes checks that one - setting only the model is how a model
+    with a 40,960-token window passed a 64k readiness check. `model.context_length` is what
+    Hermes BELIEVES the window is, and it was not being written at all: XY-FULLCONTEXT2 found
+    it left at 65,536 on Sean's PC while ollama_num_ctx had just been raised to 262,144. Two
+    numbers for one fact, disagreeing, is the exact trap the paragraph above is about, and
+    this had fallen into it one key along.
 
     Written through `hermes config set` when the CLI is on PATH, so Hermes' own writer owns
     the file and our comments and formatting survive. The YAML fallback exists for a Hermes
@@ -1189,7 +1311,8 @@ def _job_set_model(args: dict) -> dict:
 
     exe = shutil.which("hermes")
     if exe:
-        pairs = (("model.default", model), ("model.ollama_num_ctx", str(ctx)))
+        pairs = (("model.default", model), ("model.ollama_num_ctx", str(ctx)),
+                 ("model.context_length", str(ctx)))
         for key, val in pairs:
             proc = subprocess.run([exe, "config", "set", key, val],
                                   capture_output=True, text=True, timeout=45)
@@ -1200,7 +1323,7 @@ def _job_set_model(args: dict) -> dict:
 
     # Fallback: edit the config ourselves. Round-tripping YAML loses comments, so this is
     # second choice, not first.
-    home = Path(os.environ.get("HERMES_HOME") or (Path.home() / ".hermes"))
+    home = hermes_home()
     cfg = home / "config.yaml"
     try:
         import yaml
@@ -1217,9 +1340,10 @@ def _job_set_model(args: dict) -> dict:
         model_block = {}
     model_block["default"] = model
     model_block["ollama_num_ctx"] = ctx
+    model_block["context_length"] = ctx
     data["model"] = model_block
     try:
-        tmp = cfg.with_suffix(".yaml.xysy-tmp")
+        tmp = cfg.with_suffix(".yaml.xycy-tmp")
         tmp.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
         tmp.replace(cfg)
     except Exception as exc:
@@ -1244,7 +1368,7 @@ def _job_cloud_link_clear(_args: dict) -> dict:
 
 
 def _job_cloud_link_status(_args: dict) -> dict:
-    """Whether this computer is connected to a XYSY account.
+    """Whether this computer is connected to a XYCY account.
 
     Only a paired caller can reach any job at all, so in practice this always answers yes -
     it exists so the setup screen's account step reads the same field whichever door
@@ -1260,7 +1384,7 @@ def _job_cloud_link_status(_args: dict) -> dict:
 
 # --------------------------------------------------------------- XY-DOORPARITY jobs
 def _job_run_progress(args: dict) -> dict:
-    """The run's own progress ledger, byte-identical in shape to the Local Agent's.
+    """The run's own progress ledger, byte-identical in shape to the Bridge's.
 
     Read straight off disk and never synthesised. The shape matters more than it looks:
     the page treats a FAILED call as {status:'error', steps:[]}, so a door that could not
@@ -1314,7 +1438,7 @@ def _job_read_image(args: dict) -> dict:
     base = Path(str(args.get("dir") or ""))
     target = Path(raw) if os.path.isabs(raw) else (base / raw.lstrip("./\\"))
     if ".." in raw or not _inside_projects(target):
-        return {"ok": False, "error": "that picture is not inside a XYSY project"}
+        return {"ok": False, "error": "that picture is not inside a XYCY project"}
     if not target.is_file():
         return {"ok": False, "error": "not found: %s" % raw}
     size = target.stat().st_size
@@ -1333,7 +1457,7 @@ def _job_read_image(args: dict) -> dict:
 def _job_runs(_args: dict) -> dict:
     """Every run still alive on this computer, so one that outlived the page can be re-adopted.
 
-    The Local Agent keeps a registry; the door has none and must not invent one, so this
+    The Bridge keeps a registry; the door has none and must not invent one, so this
     reads the ground truth each run already writes: hermes.pid beside progress.json. A pid
     that is gone means the run is gone - it is not reported as finished, because the door
     does not know that, and a run that died is not a run that succeeded.
@@ -1350,15 +1474,20 @@ def _job_runs(_args: dict) -> dict:
                     continue
                 try:
                     pid = int(pidfile.read_text(encoding="utf-8").strip())
-                    os.kill(pid, 0)                      # signal 0 = "are you there"
+                    # XY-KILLNOTASK - this was os.kill(pid, 0), the POSIX "are you there"
+                    # idiom, which on Windows is TerminateProcess on some Python versions.
+                    # Listing the runs must never be able to end one. See the note beside
+                    # pid_is_alive in xycy_hermes_run.py, measurement included.
+                    if not _pid_is_alive(pid):
+                        continue
                 except Exception:
                     continue
                 prog, status = None, "running"
                 try:
                     prog = json.loads((run / "progress.json").read_text(encoding="utf-8"))
                     status = prog.get("status") or status
-                except Exception:
-                    pass
+                except Exception as _xy_e:
+                    say_something(_xy_e, 'local-agent/hermes-plugin/xycy/dashboard/api.py:1490')
                 steps = (prog or {}).get("steps") or []
                 runs.append({"runId": run.name, "pid": pid, "dir": str(proj),
                              "name": (prog or {}).get("name") or "",
@@ -1377,7 +1506,7 @@ def _job_set_runtime(args: dict) -> dict:
     if not name:
         return {"ok": False, "error": "which runtime?"}
     try:
-        root = Path(os.path.expanduser("~/.xysy"))
+        root = Path(os.path.expanduser("~/.xycy"))
         root.mkdir(parents=True, exist_ok=True)
         (root / "runtime.json").write_text(
             json.dumps({"runtime": name, "at": int(time.time() * 1000)}, indent=2),
@@ -1409,7 +1538,7 @@ JOBS = {"ping": _job_ping, "apps": _job_apps, "servers": _job_servers,
 
 # --------------------------------------------------------------------------- door
 class _Door(BaseHTTPRequestHandler):
-    server_version = "XYSYDoor/" + DOOR_VERSION
+    server_version = "XYCYDoor/" + DOOR_VERSION
     protocol_version = "HTTP/1.1"
 
     def log_message(self, *_a):  # keep Hermes' log readable
@@ -1448,7 +1577,7 @@ class _Door(BaseHTTPRequestHandler):
         state = _load()
         held = state.get("token") or ""
         if not held:
-            return False, "this computer is not connected to a XYSY account"
+            return False, "this computer is not connected to a XYCY account"
         # Constant time: a plain == leaks how many leading characters were right.
         if not hmac.compare_digest(token, held):
             return False, "that key is not the one this computer is paired with"
@@ -1465,7 +1594,7 @@ class _Door(BaseHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "content-type,authorization")
         self.send_header("Access-Control-Max-Age", "600")
-        # A PUBLIC page (xysy.ai) reaching a LOCAL address (127.0.0.1) is a private-network
+        # A PUBLIC page (xycy.ai) reaching a LOCAL address (127.0.0.1) is a private-network
         # request: the browser asks permission on the preflight and treats a missing answer as
         # a refusal. Answering 204 with the CORS headers alone is therefore a NO, and the page
         # sees "Failed to fetch" - indistinguishable from no door being here at all.
@@ -1492,36 +1621,36 @@ class _Door(BaseHTTPRequestHandler):
             return
         path = self.path.split("?")[0]
 
-        if path == "/xysy/hello":
+        if path == "/xycy/hello":
             # Says only that a door exists and whether it is spoken for. Deliberately
             # nothing about the person, the computer, or what is installed.
             state = _load()
-            self._say(200, {"ok": True, "door": "xysy", "version": DOOR_VERSION,
+            self._say(200, {"ok": True, "door": "xycy", "version": DOOR_VERSION,
                             "host": "hermes", "paired": bool(state.get("token")),
                             "email": state.get("email") or ""})
             return
 
-        # XY-DOORUI - the screen itself, so /xysy works with Claude closed.
-        if path in ("/", "/xysy", "/index.html"):
+        # XY-DOORUI - the screen itself, so /xycy works with Claude closed.
+        if path in ("/", "/xycy", "/index.html") or path == "/xysy":  # the last is the old name's path  # KEEP-OLD-NAME
             try:
                 _refresh_ui()
-            except Exception:
-                pass
+            except Exception as _xy_e:
+                say_something(_xy_e, 'local-agent/hermes-plugin/xycy/dashboard/api.py:1638')
             if UI_FILE.exists():
                 try:
                     self._send_bytes(200, UI_FILE.read_bytes(), "text/html")
                     return
-                except Exception:
-                    pass
+                except Exception as _xy_e:
+                    say_something(_xy_e, 'local-agent/hermes-plugin/xycy/dashboard/api.py:1644')
             self._send_bytes(503, _no_screen_page(), "text/html")
             return
 
         # XY-DOORUI - the key handover, for the page WE serve and nobody else.
         # The page's _doorConnect() fetches '/api/runkey' from its own origin; on
-        # xysy.ai a Pages function answers with the session's key. Here the door
+        # xycy.ai a Pages function answers with the session's key. Here the door
         # answers with the key this computer is already paired with — a fact any
         # local process could read from disk anyway, so this opens nothing new.
-        # A cross-origin caller (even an allowed one) is refused: xysy.ai pages
+        # A cross-origin caller (even an allowed one) is refused: xycy.ai pages
         # have their own /api/runkey, and this one is not for them.
         if path == "/api/runkey":
             origin = self.headers.get("Origin")
@@ -1532,7 +1661,7 @@ class _Door(BaseHTTPRequestHandler):
             token = state.get("token") or ""
             fresh = float(state.get("expiresAt") or 0) / 1000.0 > time.time()
             if token and not fresh:
-                # Expired pairing: ask the site to roll it, exactly as /xysy/pair does.
+                # Expired pairing: ask the site to roll it, exactly as /xycy/pair does.
                 who = _verify_upstream(token)
                 if who:
                     _save({"email": who["email"], "token": who.get("token") or token,
@@ -1549,7 +1678,7 @@ class _Door(BaseHTTPRequestHandler):
                 self._say(200, {"ok": True, "token": token,
                                 "expiresAt": int(float(state.get("expiresAt") or 0))})
             else:
-                self._say(200, {"ok": False, "error": "this computer is not connected to a XYSY account"})
+                self._say(200, {"ok": False, "error": "this computer is not connected to a XYCY account"})
             return
 
         # XY-DOORUI - static files the screen asks for, from the same cache dir.
@@ -1588,7 +1717,7 @@ class _Door(BaseHTTPRequestHandler):
         except Exception:
             body = {}
 
-        if path == "/xysy/pair":
+        if path == "/xycy/pair":
             token = str(body.get("token") or "")
             if not token:
                 self._say(400, {"ok": False, "error": "no key was handed over"})
@@ -1597,7 +1726,7 @@ class _Door(BaseHTTPRequestHandler):
             if not who:
                 # One message for forged, expired and unreachable on purpose: a
                 # caller who can tell them apart is a caller probing the lock.
-                self._say(401, {"ok": False, "error": "XYSY did not recognise that key"})
+                self._say(401, {"ok": False, "error": "XYCY did not recognise that key"})
                 return
             _save({"email": who["email"], "token": who.get("token") or token,
                    "expiresAt": who.get("expiresAt") or 0,
@@ -1613,7 +1742,7 @@ class _Door(BaseHTTPRequestHandler):
                             "expiresAt": int(saved.get("expiresAt") or 0)})
             return
 
-        if path == "/xysy/call":
+        if path == "/xycy/call":
             ok, who = self._paired_caller()
             if not ok:
                 self._say(401, {"ok": False, "error": who})
@@ -1621,7 +1750,7 @@ class _Door(BaseHTTPRequestHandler):
             job = str(body.get("job") or "")
             fn = JOBS.get(job)
             if not fn:
-                self._say(404, {"ok": False, "error": "XYSY's door cannot do '%s'" % job})
+                self._say(404, {"ok": False, "error": "XYCY's door cannot do '%s'" % job})
                 return
             try:
                 self._say(200, fn(body.get("args") or {}))
@@ -1642,10 +1771,10 @@ _door_error = ""
 def _say(msg: str) -> None:
     """One line to stderr, so it reaches `hermes serve`'s log. Never raises."""
     try:
-        sys.stderr.write("[xysy-door] " + msg + "\n")
+        sys.stderr.write("[xycy-door] " + msg + "\n")
         sys.stderr.flush()
-    except Exception:
-        pass
+    except Exception as _xy_e:
+        say_something(_xy_e, 'local-agent/hermes-plugin/xycy/dashboard/api.py:1777')
 
 
 def start_door() -> None:
@@ -1665,7 +1794,7 @@ def start_door() -> None:
         _say(_door_error)
         return
     _server.daemon_threads = True
-    _thread = threading.Thread(target=_server.serve_forever, name="xysy-door", daemon=True)
+    _thread = threading.Thread(target=_server.serve_forever, name="xycy-door", daemon=True)
     _thread.start()
     _door_error = ""
     _say("listening on 127.0.0.1:%d (door %s)" % (DOOR_PORT, DOOR_VERSION))
@@ -1676,12 +1805,12 @@ def start_door() -> None:
 # XY-DOORROOT - the door makes itself PERMANENT (v0.5.0).
 #
 # Sean, 2026-08-11, from the second Mac: the setup text ended with `hermes serve` running in a
-# Terminal window, so XYSY on that machine lived exactly as long as the window stayed open.
-# Closing it looked like "xysy.ai forgot this computer". A person should paste the setup ONCE
+# Terminal window, so XYCY on that machine lived exactly as long as the window stayed open.
+# Closing it looked like "xycy.ai forgot this computer". A person should paste the setup ONCE
 # and never think about it again - no window to keep open, back by itself after a restart.
 #
 # So the first time the door runs on a Mac that has no launchd job, it writes one:
-# ~/Library/LaunchAgents/ai.xysy.hermes-serve.plist - the same job already proven on the first
+# ~/Library/LaunchAgents/ai.xycy.hermes-serve.plist - the same job already proven on the first
 # Mac. The job's command SLEEPS briefly, then WAITS for Hermes' own port (9119) to be free
 # before starting `hermes serve`, so the copy launchd manages never fights a serve the person
 # started by hand; it simply takes over whenever that one goes away (window closed, crash,
@@ -1693,17 +1822,17 @@ def start_door() -> None:
 #     instead of guessing at Scheduled Tasks;
 #   * no kickstart of the new job now - the serve this door lives in is already the server.
 #
-# XYSY_PERSIST_NO_LOAD=1 skips the launchctl registration - a test hook, so a test with a
+# XYCY_PERSIST_NO_LOAD=1 skips the launchctl registration - a test hook, so a test with a
 # scratch HOME can prove the plist without planting a job in the REAL launchd session.
 
-PERSIST_LABEL = "ai.xysy.hermes-serve"
+PERSIST_LABEL = "ai.xycy.hermes-serve"
 _persist_state = ""
 
 
 def _hermes_serve_argv():
     """How THIS machine starts `hermes serve` - the ~/.hermes venv install first (what the
     proven first-Mac plist runs), then whatever `hermes` is on PATH."""
-    agent = Path.home() / ".hermes" / "hermes-agent"
+    agent = hermes_home() / "hermes-agent"
     py, hm = agent / "venv" / "bin" / "python", agent / "hermes"
     if py.exists() and hm.exists():
         return [str(py), str(hm), "serve", "--skip-build"]
@@ -1716,7 +1845,7 @@ def _hermes_serve_argv():
 def _persist_plist_xml(argv):
     import shlex
     home = str(Path.home())
-    log = str(Path.home() / ".hermes" / "logs" / "serve-launchd.log")
+    log = str(hermes_home() / "logs" / "serve-launchd.log")
 
     def x(t):
         return t.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
@@ -1765,12 +1894,12 @@ def ensure_persistence():
         tmp.replace(plist)
     except Exception as exc:
         return "could-not-write - %s" % exc
-    if not os.environ.get("XYSY_PERSIST_NO_LOAD"):
+    if not os.environ.get("XYCY_PERSIST_NO_LOAD"):
         try:
             subprocess.run(["launchctl", "bootstrap", "gui/%d" % os.getuid(), str(plist)],
                            capture_output=True, timeout=10)
-        except Exception:
-            pass
+        except Exception as _xy_e:
+            say_something(_xy_e, 'local-agent/hermes-plugin/xycy/dashboard/api.py:1902')
     return "installed"
 
 
@@ -1784,8 +1913,8 @@ except Exception as _exc:                      # noqa: BLE001 - a plugin must ne
     try:
         import traceback as _tb
         _tb.print_exc()
-    except Exception:
-        pass
+    except Exception as _xy_e:
+        say_something(_xy_e, 'local-agent/hermes-plugin/xycy/dashboard/api.py:1917')
 
 # The door is up (or said why not); now make sure it OUTLIVES the process it lives in.
 try:
@@ -1804,7 +1933,7 @@ if APIRouter is not None:
     @router.get("/status")
     async def status():
         state = _load()
-        return {"ok": True, "door": "xysy", "version": DOOR_VERSION, "port": DOOR_PORT,
+        return {"ok": True, "door": "xycy", "version": DOOR_VERSION, "port": DOOR_PORT,
                 "listening": _server is not None,
                 # The whole point: a door that is not listening can be ASKED why, from Hermes'
                 # own screens, without anybody reading a log.
@@ -1818,16 +1947,16 @@ else:  # pragma: no cover
 # ---------------------------------------------------------------------------------------------
 # Run the door BY HAND and watch it:
 #
-#     ~/.hermes/hermes-agent/venv/bin/python ~/.hermes/plugins/xysy/dashboard/api.py
+#     ~/.hermes/hermes-agent/venv/bin/python ~/.hermes/plugins/xycy/dashboard/api.py
 #
 # `hermes serve` starts the door in a daemon thread wrapped so a plugin can never break serve.
 # That is correct, and it means a door that fails to open is invisible. This is the way to see it.
 if __name__ == "__main__":
     print("")
-    print("  XYSY door %s" % DOOR_VERSION)
+    print("  XYCY door %s" % DOOR_VERSION)
     print("  port        : %d" % DOOR_PORT)
     print("  state file  : %s" % STATE)
-    print("  hermes home : %s" % os.environ.get("HERMES_HOME", str(Path.home() / ".hermes")))
+    print("  hermes home : %s" % hermes_home())
     print("")
     # start_door() already ran at import. This either returns immediately (already open) or
     # retries and records why not.
@@ -1838,10 +1967,10 @@ if __name__ == "__main__":
         print("")
         print("  If it says the address is in use, something already holds the port - which may")
         print("  well be a door that is working. Check with:")
-        print("      curl -s http://127.0.0.1:%d/xysy/hello" % DOOR_PORT)
+        print("      curl -s http://127.0.0.1:%d/xycy/hello" % DOOR_PORT)
         raise SystemExit(1)
     print("  Listening. Ask it from another window with:")
-    print("      curl -s http://127.0.0.1:%d/xysy/hello" % DOOR_PORT)
+    print("      curl -s http://127.0.0.1:%d/xycy/hello" % DOOR_PORT)
     print("")
     print("  Ctrl+C to stop. (Hermes runs this for you normally - this is only for looking.)")
     try:

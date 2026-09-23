@@ -1,19 +1,19 @@
 #!/bin/bash
-# Keep Hermes' server — and therefore the XYSY door — running across reboots, on macOS.
+# Keep Hermes' server — and therefore the XYCY door — running across reboots, on macOS.
 #
-# Run it once:   bash ~/.hermes/plugins/xysy/keep-serving.sh
+# Run it once:   bash ~/.hermes/plugins/xycy/keep-serving.sh
 #
 # It writes a LaunchAgent, starts it, and then asks the door whether it is answering. It removes
 # nothing, and running it twice is safe. To undo:
-#   launchctl bootout gui/$(id -u)/ai.xysy.hermes-serve
-#   rm ~/Library/LaunchAgents/ai.xysy.hermes-serve.plist
+#   launchctl bootout gui/$(id -u)/ai.xycy.hermes-serve
+#   rm ~/Library/LaunchAgents/ai.xycy.hermes-serve.plist
 set -u
 
 HERMES_HOME="${HERMES_HOME:-$HOME/.hermes}"
 PY="$HERMES_HOME/hermes-agent/venv/bin/python"
 HZ="$HERMES_HOME/hermes-agent/hermes"
-PORT="${XYSY_DOOR_PORT:-4850}"
-LABEL="ai.xysy.hermes-serve"
+PORT="${XYCY_DOOR_PORT:-4850}"
+LABEL="ai.xycy.hermes-serve"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 
 echo ""
@@ -72,7 +72,7 @@ echo "  Waiting for the door..."
 ANS=""
 for i in 1 2 3 4 5 6 7 8 9 10; do
   sleep 3
-  ANS="$(curl -s -m 4 "http://127.0.0.1:$PORT/xysy/hello" 2>/dev/null)"
+  ANS="$(curl -s -m 4 "http://127.0.0.1:$PORT/xycy/hello" 2>/dev/null)"
   [ -n "$ANS" ] && break
 done
 
@@ -81,7 +81,7 @@ if [ -n "$ANS" ]; then
   echo "  OK  $ANS"
   echo ""
   echo "  The door is up and will come back after a reboot."
-  echo "  Open XYSY at:  http://127.0.0.1:$PORT/xysy"
+  echo "  Open XYCY at:  http://127.0.0.1:$PORT/xycy"
 else
   echo "  ?   Nothing answered on 127.0.0.1:$PORT after 30 seconds."
   echo "      Last lines of the log:"

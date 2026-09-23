@@ -1,5 +1,5 @@
-name: xysy
-version: "0.7.3"
-description: "XYSY's door — a small loopback listener beside Hermes' own server that lets XYSY on the web drive the creative applications on this computer. Four locks: loopback only, an origin allowlist enforced on the preflight and the request, a bearer token always, and pairing to one XYSY account. Photographs an application through its own MCP connector rather than the screen, so it needs no macOS Screen Recording permission."
-author: XYSY
-homepage: https://xysy.ai
+name: xycy
+version: "0.7.5"
+description: "XYCY's door — a small loopback listener beside Hermes' own server that lets XYCY on the web drive the creative applications on this computer. Four locks: loopback only, an origin allowlist enforced on the preflight and the request, a bearer token always, and pairing to one XYCY account. Photographs an application through its own MCP connector rather than the screen, so it needs no macOS Screen Recording permission."
+author: XYCY
+homepage: https://xycy.ai
